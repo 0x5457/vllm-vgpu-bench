@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execa, ExecaChildProcess } from 'execa';
+import http from 'node:http';
+import https from 'node:https';
+import {execa} from 'execa';
+import type { ExecaChildProcess } from 'execa';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(scriptDir, '..');
@@ -60,6 +63,20 @@ export function vllmServeArgs({
   ];
 }
 
+export function resolveVllmCommand(): { command: string; argsPrefix: string[] } {
+  const vllmPython = process.env.VLLM_PYTHON;
+  if (vllmPython && vllmPython.trim()) {
+    return { command: vllmPython, argsPrefix: ['-m', 'vllm.entrypoints.cli.main'] };
+  }
+
+  const vllmBin = process.env.VLLM_BIN;
+  if (vllmBin && vllmBin.trim()) {
+    return { command: vllmBin, argsPrefix: [] };
+  }
+
+  return { command: 'vllm', argsPrefix: [] };
+}
+
 export function spawnLogged(
   command: string,
   args: string[],
@@ -101,6 +118,32 @@ export function spawnLogged(
   return child;
 }
 
+async function getHttpStatus(url: string, timeoutMs: number): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const lib = target.protocol === 'https:' ? https : http;
+    const req = lib.request(
+      {
+        method: 'GET',
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error('timeout'));
+    });
+    req.end();
+  });
+}
+
 export async function waitForHttpOk(
   url: string,
   {
@@ -113,9 +156,9 @@ export async function waitForHttpOk(
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url, { method: 'GET' });
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
+      const status = await getHttpStatus(url, Math.min(5000, timeoutMs));
+      if (status >= 200 && status < 300) return;
+      lastError = new Error(`HTTP ${status}`);
     } catch (err) {
       lastError = err as Error;
     }
@@ -184,4 +227,96 @@ export function ensureExists(label: string, filePath: string): void {
   if (!fs.existsSync(filePath)) {
     throw new Error(`${label} not found: ${filePath}`);
   }
+}
+
+type GpuSample = {
+  timestampMs: number;
+  utilGpu: number;
+  utilMem: number;
+  memUsedMiB: number;
+  memTotalMiB: number;
+  powerW: number;
+  tempC: number;
+};
+
+type GpuStats = {
+  samples: number;
+  avg: Partial<GpuSample>;
+  max: Partial<GpuSample>;
+};
+
+function parseGpuSample(line: string): GpuSample | null {
+  const parts = line.split(',').map((v) => v.trim());
+  if (parts.length < 6) return null;
+  const [utilGpu, utilMem, memUsedMiB, memTotalMiB, powerW, tempC] = parts.map(
+    (v) => Number(v),
+  );
+  if (![utilGpu, utilMem, memUsedMiB, memTotalMiB, powerW, tempC].every(Number.isFinite)) {
+    return null;
+  }
+  return {
+    timestampMs: Date.now(),
+    utilGpu,
+    utilMem,
+    memUsedMiB,
+    memTotalMiB,
+    powerW,
+    tempC,
+  };
+}
+
+export function startGpuSampler(intervalMs = 1000): {
+  stop: () => Promise<GpuStats | null>;
+} {
+  let stopped = false;
+  let inFlight = false;
+  const samples: GpuSample[] = [];
+
+  const timer = setInterval(async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const result = await execa('nvidia-smi', [
+        '--query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,temperature.gpu',
+        '--format=csv,noheader,nounits',
+      ]);
+      const line = (result.stdout || '').split('\n')[0]?.trim();
+      if (line) {
+        const sample = parseGpuSample(line);
+        if (sample) samples.push(sample);
+      }
+    } catch {
+      // Ignore sampling errors; keep benchmark running.
+    } finally {
+      inFlight = false;
+    }
+  }, intervalMs);
+
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (!samples.length) return null;
+
+      const avg: Partial<GpuSample> = {};
+      const max: Partial<GpuSample> = {};
+      const keys: Array<keyof GpuSample> = [
+        'utilGpu',
+        'utilMem',
+        'memUsedMiB',
+        'memTotalMiB',
+        'powerW',
+        'tempC',
+      ];
+
+      for (const key of keys) {
+        const values = samples.map((s) => s[key]);
+        const sum = values.reduce((a, b) => a + b, 0);
+        avg[key] = sum / values.length;
+        max[key] = Math.max(...values);
+      }
+
+      return { samples: samples.length, avg, max };
+    },
+  };
 }

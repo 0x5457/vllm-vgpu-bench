@@ -6,7 +6,7 @@ import {
   DEFAULT_PORT_A,
   DEFAULT_PORT_B,
 } from './config.js';
-import { ensureSingleCudaVisible, vllmServeArgs } from './lib.js';
+import { ensureSingleCudaVisible, resolveVllmCommand, vllmServeArgs } from './lib.js';
 
 try {
   ensureSingleCudaVisible();
@@ -19,27 +19,35 @@ const model = process.env.VLLM_MODEL ?? DEFAULT_MODEL;
 const portA = process.env.VLLM_PORT_A ?? DEFAULT_PORT_A;
 const portB = process.env.VLLM_PORT_B ?? DEFAULT_PORT_B;
 const gpuMemoryUtilization =
-  process.env.VLLM_GPU_MEMORY_UTILIZATION ?? DEFAULT_GPU_UTIL_DOUBLE;
+  process.env.VLLM_GPU_UTIL_DOUBLE ??
+  process.env.VLLM_GPU_MEMORY_UTILIZATION ??
+  DEFAULT_GPU_UTIL_DOUBLE;
+const maxModelLen = process.env.VLLM_MAX_MODEL_LEN
+  ? Number(process.env.VLLM_MAX_MODEL_LEN)
+  : undefined;
 
 const argsA = vllmServeArgs({
   model,
   port: portA,
   gpuMemoryUtilization,
+  maxModelLen,
 });
 
 const argsB = vllmServeArgs({
   model,
   port: portB,
   gpuMemoryUtilization,
+  maxModelLen,
 });
 
-const childA = execa('vllm', argsA, {
+const { command, argsPrefix } = resolveVllmCommand();
+const childA = execa(command, [...argsPrefix, ...argsA], {
   stdio: 'inherit',
   env: process.env,
   reject: false,
 });
 
-const childB = execa('vllm', argsB, {
+const childB = execa(command, [...argsPrefix, ...argsB], {
   stdio: 'inherit',
   env: process.env,
   reject: false,

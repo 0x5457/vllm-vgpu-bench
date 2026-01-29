@@ -1,6 +1,8 @@
-PYTHON ?= python
+VENV ?= .venv
+PYTHON ?= $(VENV)/bin/python
 NPM ?= npm
 TSX ?= npx tsx
+COOLDOWN_S ?= 5
 
 .PHONY: help install-node install-python start-single start-double bench-matrix clean-results
 
@@ -18,17 +20,17 @@ install-node:
 	$(NPM) install
 
 install-python:
-	uv venv .venv
-	. .venv/bin/activate && uv sync --frozen
+	uv venv $(VENV)
+	UV_PROJECT_ENVIRONMENT=$(VENV) uv sync --frozen
 
 start-single:
-	$(TSX) scripts/start_single.ts
+	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/start_single.ts
 
 start-double:
-	$(TSX) scripts/start_double.ts
+	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/start_double.ts
 
 bench-matrix:
-	$(TSX) scripts/run_matrix.ts
+	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/run_matrix.ts --python $(PYTHON) --cooldown-s $(COOLDOWN_S)
 
 clean-results:
 	rm -rf results

@@ -34,9 +34,27 @@ npx tsx scripts/run_matrix.ts \
 ```
 
 输出在 `results/YYYYMMDD_HHMMSS/`，包含 `summary.csv` / `summary.json` 以及日志。
+`bench-matrix` 会自动清理 vLLM/限流子进程并在每轮之间冷却。
 
 ## 可选参数
 - `--skip-baseline`
 - `--python /path/to/python`
 - `--hypervisor-bin /path/to/hypervisor`
 - `--limiter-so /path/to/libcuda_limiter.so`
+
+## 环境变量
+- `VLLM_MAX_MODEL_LEN`：统一设置 max model len
+- `VLLM_GPU_UTIL_SINGLE`：单进程显存占用比例
+- `VLLM_GPU_UTIL_DOUBLE`：双进程显存占用比例
+- `COOLDOWN_S`：`bench-matrix` 每轮结束后的冷却秒数（默认 5）
+
+## 指标采集
+- `bench-matrix` 会用 `nvidia-smi` 采集 GPU 指标（1s 采样），落盘到每个 run 的 `summary.json` 中。
+- `summary.csv` 追加字段：
+  - `gpuSamples`
+  - `gpuAvgUtilGpu`, `gpuAvgUtilMem`
+  - `gpuAvgMemUsedMiB`, `gpuAvgMemTotalMiB`
+  - `gpuAvgPowerW`, `gpuAvgTempC`
+  - `gpuMaxUtilGpu`, `gpuMaxUtilMem`
+  - `gpuMaxMemUsedMiB`, `gpuMaxMemTotalMiB`
+  - `gpuMaxPowerW`, `gpuMaxTempC`

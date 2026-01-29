@@ -48,19 +48,21 @@ async def one_request(
     client: httpx.AsyncClient,
     base_url: str,
     model: str,
+    prompt: str,
     max_tokens: int,
     timeout_s: float,
 ) -> Tuple[float, int]:
     payload = {
         "model": model,
-        "prompt": PROMPT,
+        "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": 0,
         "stream": False,
     }
     t0 = time.perf_counter()
     r = await client.post(f"{base_url}/v1/completions", json=payload, timeout=timeout_s)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
     data = r.json()
     t1 = time.perf_counter()
 
@@ -77,6 +79,7 @@ async def one_request(
 async def run_benchmark(
     base_urls: List[str],
     model: str,
+    prompt: str,
     max_tokens: int,
     total_requests: int,
     concurrency: int,
@@ -86,13 +89,14 @@ async def run_benchmark(
     latencies: List[float] = []
     tokens: List[int] = []
 
-    async with httpx.AsyncClient() as client:
+    # Avoid local proxy settings (http_proxy) interfering with localhost benchmarks.
+    async with httpx.AsyncClient(trust_env=False) as client:
 
         async def run_one(i: int) -> None:
             base_url = base_urls[i % len(base_urls)]
             async with sem:
                 latency, tok = await one_request(
-                    client, base_url, model, max_tokens, timeout_s
+                    client, base_url, model, prompt, max_tokens, timeout_s
                 )
             latencies.append(latency)
             tokens.append(tok)
@@ -114,6 +118,7 @@ def main() -> None:
     )
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B")
     parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--max-model-len", type=int, default=None)
     parser.add_argument("--total-requests", type=int, default=60)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--timeout-s", type=float, default=120.0)
@@ -125,10 +130,19 @@ def main() -> None:
     if args.concurrency < 1 or args.concurrency > 2:
         raise SystemExit("Concurrency must be 1 or 2 to meet benchmark rules.")
 
+    prompt = PROMPT
+    if args.max_model_len:
+        token_budget = max(1, args.max_model_len - args.max_tokens)
+        max_prompt_words = max(1, min(512, int(token_budget / 2)))
+        words = prompt.split()
+        if len(words) > max_prompt_words:
+            prompt = " ".join(words[:max_prompt_words])
+
     latencies, tokens, elapsed = asyncio.run(
         run_benchmark(
             base_urls,
             args.model,
+            prompt,
             args.max_tokens,
             args.total_requests,
             args.concurrency,

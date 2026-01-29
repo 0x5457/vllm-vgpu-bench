@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import https from 'node:https';
 import {execa} from 'execa';
-import type { ExecaChildProcess } from 'execa';
-
+import type { Subprocess } from 'execa';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(scriptDir, '..');
 
@@ -86,7 +85,7 @@ export function spawnLogged(
     logFile?: string;
     name?: string;
   } = {},
-): ExecaChildProcess {
+): Subprocess {
   const { cwd, env, logFile, name = command } = options;
   const child = execa(command, args, {
     cwd,
@@ -178,7 +177,7 @@ export async function waitForPorts(
   }
 }
 
-export function killProcessTree(child?: ExecaChildProcess, timeoutMs = 5000): void {
+export function killProcessTree(child?: Subprocess, timeoutMs = 5000): void {
   if (!child?.pid) return;
   try {
     process.kill(-child.pid, 'SIGTERM');
@@ -195,6 +194,7 @@ export function killProcessTree(child?: ExecaChildProcess, timeoutMs = 5000): vo
     if (Date.now() - started > timeoutMs) {
       clearInterval(interval);
       try {
+        if (!child.pid) return;
         process.kill(-child.pid, 'SIGKILL');
       } catch (err) {
         const error = err as NodeJS.ErrnoException;

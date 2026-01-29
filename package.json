@@ -1,0 +1,16 @@
+{
+  "name": "vllm-vgpu-bench",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "commander": "^12.1.0",
+    "execa": "^9.4.0",
+    "tsx": "^4.19.2"
+  },
+  "scripts": {
+    "start:single": "tsx scripts/start_single.ts",
+    "start:double": "tsx scripts/start_double.ts",
+    "bench:matrix": "tsx scripts/run_matrix.ts"
+  }
+}

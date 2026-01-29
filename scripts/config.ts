@@ -1,0 +1,9 @@
+export const DEFAULT_MODEL = 'Qwen/Qwen2.5-0.5B';
+export const DEFAULT_PORT_SINGLE = '8000';
+export const DEFAULT_PORT_A = '8000';
+export const DEFAULT_PORT_B = '8001';
+export const DEFAULT_GPU_UTIL_SINGLE = '0.75';
+export const DEFAULT_GPU_UTIL_DOUBLE = '0.36';
+export const DEFAULT_BASE_HOST = 'http://127.0.0.1';
+export const DEFAULT_HYPERVISOR_PORT = '8080';
+export const DEFAULT_SHM_PATH = '/tmp/tensor-fusion-local';

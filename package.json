@@ -9,8 +9,6 @@
     "tsx": "^4.19.2"
   },
   "scripts": {
-    "start:single": "tsx scripts/start_single.ts",
-    "start:double": "tsx scripts/start_double.ts",
     "bench:matrix": "tsx scripts/run_matrix.ts"
   }
 }

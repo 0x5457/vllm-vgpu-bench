@@ -343,14 +343,26 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
 }
 
 async function main() {
+  const totalRuns =
+    (skipBaseline ? 0 : modes.length) + utils.length * modes.length;
+  let runIndex = 0;
+
   if (!skipBaseline) {
     for (const mode of modes) {
+      runIndex += 1;
+      console.log(
+        `[${runIndex}/${totalRuns}] start ${mode} ${makeRunLabel(null)}`,
+      );
       await runOne({ mode, limiterTarget: null });
     }
   }
 
   for (const util of utils) {
     for (const mode of modes) {
+      runIndex += 1;
+      console.log(
+        `[${runIndex}/${totalRuns}] start ${mode} ${makeRunLabel(util)}`,
+      );
       await runOne({ mode, limiterTarget: util });
     }
   }

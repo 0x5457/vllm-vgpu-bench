@@ -23,14 +23,8 @@ install-python:
 	uv venv $(VENV)
 	UV_PROJECT_ENVIRONMENT=$(VENV) uv sync --frozen
 
-start-single:
-	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/start_single.ts
-
-start-double:
-	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/start_double.ts
-
 bench-matrix:
-	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/run_matrix.ts --python $(PYTHON) --cooldown-s $(COOLDOWN_S)
+	VLLM_PYTHON=$(PYTHON) $(TSX) scripts/run_matrix.ts --python $(PYTHON) --cooldown-s $(COOLDOWN_S) $(ARGS)
 
 clean-results:
 	rm -rf results

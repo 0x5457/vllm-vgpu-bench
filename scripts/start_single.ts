@@ -5,7 +5,12 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PORT_SINGLE,
 } from './config.js';
-import { ensureSingleCudaVisible, resolveVllmCommand, vllmServeArgs } from './lib.js';
+import {
+  applyLocalHfCacheEnv,
+  ensureSingleCudaVisible,
+  resolveVllmCommand,
+  vllmServeArgs,
+} from './lib.js';
 
 try {
   ensureSingleCudaVisible();
@@ -32,9 +37,10 @@ const args = vllmServeArgs({
 });
 
 const { command, argsPrefix } = resolveVllmCommand();
+const env = applyLocalHfCacheEnv(process.env);
 const child = execa(command, [...argsPrefix, ...args], {
   stdio: 'inherit',
-  env: process.env,
+  env,
   reject: false,
 });
 

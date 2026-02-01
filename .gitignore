@@ -1,6 +1,7 @@
 .DS_Store
 .direnv
 .env
+.cache/
 .venv
 .venv*/
 .tmp/

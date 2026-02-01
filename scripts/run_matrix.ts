@@ -13,6 +13,7 @@ import {
   DEFAULT_SHM_PATH,
 } from './config.js';
 import {
+  applyLocalHfCacheEnv,
   ensureSingleCudaVisible,
   ensureExists,
   killProcessTree,
@@ -90,6 +91,7 @@ const gpuUtilDouble =
   process.env.VLLM_GPU_UTIL_DOUBLE ??
   process.env.VLLM_GPU_MEMORY_UTILIZATION ??
   DEFAULT_GPU_UTIL_DOUBLE;
+const baseEnv = applyLocalHfCacheEnv(process.env);
 
 const resultsRoot = resolvePath(projectRoot, resultsBase, nowStamp());
 fs.mkdirSync(resultsRoot, { recursive: true });
@@ -162,7 +164,7 @@ async function runBench(runDir: string, baseUrls: string[]) {
   const args = buildBenchArgs(baseUrls);
   const result = await execa(pythonBin, args, {
     cwd: projectRoot,
-    env: process.env,
+    env: baseEnv,
     all: true,
     reject: false,
   });
@@ -200,7 +202,6 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     ? [`${baseHost}:${DEFAULT_PORT_A}`, `${baseHost}:${DEFAULT_PORT_B}`]
     : [`${baseHost}:${DEFAULT_PORT_A}`];
 
-  const baseEnv = { ...process.env };
   const runEnv = { ...baseEnv };
   const shmPath =
     limiterTarget !== null

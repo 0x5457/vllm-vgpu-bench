@@ -12,6 +12,16 @@ export function resolvePath(...parts: string[]): string {
   return path.resolve(...parts);
 }
 
+export function applyLocalHfCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (env.HF_HOME || env.HF_HUB_CACHE || env.TRANSFORMERS_CACHE) {
+    return env;
+  }
+  return {
+    ...env,
+    HF_HOME: path.resolve(projectRoot, '.cache', 'huggingface'),
+  };
+}
+
 export function nowStamp(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');

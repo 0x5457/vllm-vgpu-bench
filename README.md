@@ -47,6 +47,7 @@ npx tsx scripts/run_matrix.ts \
 - `VLLM_GPU_UTIL_SINGLE`：单进程显存占用比例
 - `VLLM_GPU_UTIL_DOUBLE`：双进程显存占用比例
 - `COOLDOWN_S`：`bench-matrix` 每轮结束后的冷却秒数（默认 5）
+- `HF_HOME` / `HF_HUB_CACHE` / `TRANSFORMERS_CACHE`：模型缓存目录（默认：项目内 `.cache/huggingface`）
 
 ## 指标采集
 - `bench-matrix` 会用 `nvidia-smi` 采集 GPU 指标（1s 采样），落盘到每个 run 的 `summary.json` 中。

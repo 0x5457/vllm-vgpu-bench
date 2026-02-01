@@ -68,8 +68,6 @@ const toOptionalNumber = (value: unknown): number | undefined => {
 
 const toCsvValue = (value: unknown): string => (value == null ? '' : String(value));
 
-const SERVICE_ACCOUNT_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/token';
-
 const modes = splitList(String(options.modes));
 const utils = parseNumberList(String(options.utils));
 
@@ -174,16 +172,6 @@ async function runBench(runDir: string, baseUrls: string[]) {
   return { exitCode: result.exitCode ?? 0, metrics, logFile };
 }
 
-function limiterTokenAvailable(): boolean {
-  try {
-    if (!fs.existsSync(SERVICE_ACCOUNT_TOKEN_PATH)) return false;
-    const token = fs.readFileSync(SERVICE_ACCOUNT_TOKEN_PATH, 'utf8').trim();
-    return token.length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function makeRunLabel(limiterTarget: number | null): string {
   return limiterTarget === null ? 'baseline' : `limit_${limiterTarget}`;
 }
@@ -209,50 +197,6 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
       : undefined;
 
   if (limiterTarget !== null) {
-    if (!limiterTokenAvailable()) {
-      const benchError = `Limiter disabled: missing service account token at ${SERVICE_ACCOUNT_TOKEN_PATH}`;
-      console.error(`[${runId}] ${benchError}`);
-      fs.writeFileSync(
-        resolvePath(runDir, 'meta.json'),
-        JSON.stringify(
-          {
-            mode,
-            limiterTarget,
-            baseUrls,
-            maxModelLen: maxModelLen ?? null,
-            gpuMemoryUtilization: isDouble ? gpuUtilDouble : gpuUtilSingle,
-            env: {
-              CUDA_VISIBLE_DEVICES: runEnv.CUDA_VISIBLE_DEVICES,
-            },
-            limiterAvailable: false,
-          },
-          null,
-          2,
-        ),
-      );
-      fs.writeFileSync(
-        resolvePath(runDir, 'summary.json'),
-        JSON.stringify(
-          {
-            mode,
-            limiterTarget,
-            bench: { exitCode: 1, metrics: {}, logFile: resolvePath(runDir, 'bench.log') },
-            benchError,
-            gpu: null,
-          },
-          null,
-          2,
-        ),
-      );
-      summaryRows.push({
-        mode,
-        limiterTarget,
-        benchExitCode: 1,
-        benchError,
-        gpuSamples: null,
-      });
-      return;
-    }
     runEnv.HYPERVISOR_IP = '127.0.0.1';
     runEnv.HYPERVISOR_PORT = DEFAULT_HYPERVISOR_PORT;
     runEnv.SHM_PATH = shmPath ?? DEFAULT_SHM_PATH;

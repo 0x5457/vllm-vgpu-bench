@@ -106,13 +106,15 @@ export function spawnLogged(
   });
 
   if (logFile) {
-    const stream = fs.createWriteStream(logFile, { flags: 'a' });
+    // Use a large highWaterMark so vLLM/child is not blocked when logging a lot at startup
+    const stream = fs.createWriteStream(logFile, {
+      flags: 'a',
+      highWaterMark: 512 * 1024,
+    });
     if (child.stdout) {
-      child.stdout.pipe(process.stdout);
       child.stdout.pipe(stream);
     }
     if (child.stderr) {
-      child.stderr.pipe(process.stderr);
       child.stderr.pipe(stream);
     }
   } else {
@@ -163,10 +165,38 @@ export async function waitForHttpOk(
   const deadline = Date.now() + timeoutMs;
   let lastError: Error | null = null;
 
+  const start = Date.now();
   while (Date.now() < deadline) {
     try {
       const status = await getHttpStatus(url, Math.min(5000, timeoutMs));
       if (status >= 200 && status < 300) return;
+      lastError = new Error(`HTTP ${status}`);
+    } catch (err) {
+      lastError = err as Error;
+    }
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    process.stderr.write(`  waiting for ${url} ... ${elapsed}s\n`);
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  const reason = lastError ? lastError.message : 'timeout';
+  throw new Error(`Timeout waiting for ${url} (${reason})`);
+}
+
+export async function waitForHttpReady(
+  url: string,
+  {
+    timeoutMs = 120_000,
+    intervalMs = 1000,
+  }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: Error | null = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const status = await getHttpStatus(url, Math.min(5000, timeoutMs));
+      if (status > 0) return;
       lastError = new Error(`HTTP ${status}`);
     } catch (err) {
       lastError = err as Error;

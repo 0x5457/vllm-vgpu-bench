@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import net from 'node:net';
 import { execa } from 'execa';
 import { Command } from 'commander';
 import {
@@ -25,6 +26,7 @@ import {
   resolveVllmCommand,
   spawnLogged,
   vllmServeArgs,
+  waitForHttpReady,
   waitForPorts,
 } from './lib.js';
 
@@ -108,6 +110,7 @@ const limiterSo =
 type RunSummary = Record<string, unknown>;
 const summaryRows: RunSummary[] = [];
 const activeChildren = new Set<ReturnType<typeof spawnLogged>>();
+const kvCacheBytesByMode = new Map<string, number>();
 
 function registerChild(child: ReturnType<typeof spawnLogged> | null) {
   if (!child) return;
@@ -176,6 +179,46 @@ function makeRunLabel(limiterTarget: number | null): string {
   return limiterTarget === null ? 'baseline' : `limit_${limiterTarget}`;
 }
 
+function cleanupShmPath(pathToRemove: string | undefined) {
+  if (!pathToRemove) return;
+  try {
+    fs.rmSync(pathToRemove, { recursive: true, force: true });
+  } catch (err) {
+    console.warn(`Failed to remove shared memory path ${pathToRemove}:`, err);
+  }
+}
+
+function parseKvCacheBytes(logFile: string): number | null {
+  if (!fs.existsSync(logFile)) return null;
+  const text = fs.readFileSync(logFile, 'utf8');
+  const regex = /Available KV cache memory:\s*([0-9.]+)\s*GiB/g;
+  let match: RegExpExecArray | null = null;
+  let lastValue: number | null = null;
+  while ((match = regex.exec(text))) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) lastValue = value;
+  }
+  if (lastValue == null) return null;
+  return Math.floor(lastValue * 1024 ** 3);
+}
+
+async function findFreePort(preferred?: number): Promise<number> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.on('error', () => {
+      server.close(() => {
+        resolve(findFreePort());
+      });
+    });
+    server.listen(preferred ?? 0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : preferred ?? 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: number | null }) {
   ensureSingleCudaVisible();
 
@@ -191,16 +234,23 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     : [`${baseHost}:${DEFAULT_PORT_A}`];
 
   const runEnv = { ...baseEnv };
-  const shmPath =
+  const shmBasePath =
     limiterTarget !== null
       ? resolvePath('/tmp', `tensor-fusion-${nowStamp()}-${runId}`)
       : undefined;
+  const hypervisorPort =
+    limiterTarget !== null ? await findFreePort(DEFAULT_HYPERVISOR_PORT) : DEFAULT_HYPERVISOR_PORT;
 
   if (limiterTarget !== null) {
     runEnv.HYPERVISOR_IP = '127.0.0.1';
-    runEnv.HYPERVISOR_PORT = DEFAULT_HYPERVISOR_PORT;
-    runEnv.SHM_PATH = shmPath ?? DEFAULT_SHM_PATH;
+    runEnv.HYPERVISOR_PORT = String(hypervisorPort);
     runEnv.LD_PRELOAD = limiterSo;
+    runEnv.ENABLE_NVML_HOOKS ??= 'false';
+    runEnv.CONTAINER_NAME ??= `tf-bench-${runId}`;
+    runEnv.TF_HEALTH_TIMEOUT_SECS ??= '0';
+    runEnv.TF_SKIP_CUDA_PRELOAD ??= '1';
+    runEnv.NO_PROXY ??= '127.0.0.1,localhost';
+    runEnv.no_proxy ??= runEnv.NO_PROXY;
   }
 
   const metadata = {
@@ -224,6 +274,11 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     ensureExists('hypervisor binary', hypervisorBin);
     ensureExists('cuda limiter library', limiterSo);
 
+    cleanupShmPath(runEnv.SHM_PATH);
+    cleanupShmPath(shmBasePath);
+    cleanupShmPath(DEFAULT_SHM_PATH);
+    runEnv.SHM_PATH = shmBasePath ?? DEFAULT_SHM_PATH;
+
     const hypervisorArgs = [
       'local',
       '--devices',
@@ -231,10 +286,16 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
       '--target-util',
       String(limiterTarget),
       '--api-port',
-      DEFAULT_HYPERVISOR_PORT,
+      String(hypervisorPort),
+      '--shm-path',
+      shmBasePath ?? DEFAULT_SHM_PATH,
       '-v',
     ];
-    const hypervisorEnv = { ...baseEnv };
+    const hypervisorEnv = {
+      ...baseEnv,
+      SHM_PATH: shmBasePath,
+      SHM_BASE_PATH: shmBasePath,
+    };
     hypervisorChild = spawnLogged(hypervisorBin, hypervisorArgs, {
       cwd: vgpuRoot,
       env: hypervisorEnv,
@@ -242,6 +303,10 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
       name: 'hypervisor',
     });
     registerChild(hypervisorChild);
+    await waitForHttpReady(`${baseHost}:${hypervisorPort}/healthz`, {
+      timeoutMs: 60_000,
+      intervalMs: 1000,
+    });
   }
 
   const vllmArgs = vllmServeArgs({
@@ -250,6 +315,15 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     gpuMemoryUtilization: isDouble ? gpuUtilDouble : gpuUtilSingle,
     maxModelLen,
   });
+  const kvCacheBytesArg =
+    limiterTarget !== null
+      ? (kvCacheBytesByMode.get(mode) != null
+          ? String(kvCacheBytesByMode.get(mode))
+          : process.env.VLLM_KV_CACHE_MEMORY_BYTES ?? null)
+      : null;
+  if (kvCacheBytesArg) {
+    vllmArgs.push('--kv-cache-memory-bytes', kvCacheBytesArg);
+  }
   const { command: vllmCommand, argsPrefix } = resolveVllmCommand();
 
   const vllmChildA = spawnLogged(vllmCommand, [...argsPrefix, ...vllmArgs], {
@@ -287,7 +361,9 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
   let gpuSampler: ReturnType<typeof startGpuSampler> | null = null;
 
   try {
+    console.log(`[${runId}] Waiting for vLLM at ${baseUrls.join(', ')} (timeout 180s)...`);
     await waitForPorts(baseUrls, { timeoutMs: 180_000, intervalMs: 1000 });
+    console.log(`[${runId}] vLLM ready, starting benchmark`);
     gpuSampler = startGpuSampler(1000);
     benchResult = await runBench(runDir, baseUrls);
   } catch (err) {
@@ -300,6 +376,19 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     stopChild(vllmChildA);
     if (vllmChildB) stopChild(vllmChildB);
     if (hypervisorChild) stopChild(hypervisorChild);
+    if (limiterTarget !== null) {
+      cleanupShmPath(runEnv.SHM_PATH);
+      cleanupShmPath(shmBasePath);
+      cleanupShmPath(DEFAULT_SHM_PATH);
+    }
+    if (limiterTarget === null) {
+      const kvCacheBytesFromLog = parseKvCacheBytes(
+        resolvePath(runDir, 'vllm_8000.log'),
+      );
+      if (kvCacheBytesFromLog) {
+        kvCacheBytesByMode.set(mode, kvCacheBytesFromLog);
+      }
+    }
     if (Number.isFinite(cooldownSeconds) && cooldownSeconds > 0) {
       await new Promise((resolve) => setTimeout(resolve, cooldownSeconds * 1000));
     }
@@ -325,6 +414,14 @@ async function runOne({ mode, limiterTarget }: { mode: string; limiterTarget: nu
     gpuMaxPowerW: gpuStats?.max?.powerW ?? null,
     gpuMaxTempC: gpuStats?.max?.tempC ?? null,
   });
+  const summaryLine = [
+    new Date().toISOString(),
+    runId,
+    `exit=${benchResult.exitCode}`,
+    benchError ? `error=${benchError}` : 'error=',
+    `tokensPerSecond=${benchResult.metrics.tokensPerSecond ?? ''}`,
+  ].join(' ');
+  fs.appendFileSync(resolvePath(resultsRoot, 'run_summary.log'), `${summaryLine}\n`);
 
   fs.writeFileSync(
     resolvePath(runDir, 'summary.json'),

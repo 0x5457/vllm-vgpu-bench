@@ -497,8 +497,68 @@ async function main() {
 
   fs.writeFileSync(resolvePath(resultsRoot, 'summary.csv'), csvLines.join('\n'));
   fs.writeFileSync(resolvePath(resultsRoot, 'summary.json'), JSON.stringify(summaryRows, null, 2));
+  const summaryTable = formatSummaryTable(summaryRows);
+  fs.writeFileSync(resolvePath(resultsRoot, 'summary_table.txt'), summaryTable);
+  console.log('\n' + summaryTable);
 
   console.log(`Results saved to ${resultsRoot}`);
+}
+
+function formatSummaryTable(rows: RunSummary[]): string {
+  const byModeBaseline = new Map<string, RunSummary>();
+  for (const row of rows) {
+    if (row.limiterTarget == null) {
+      byModeBaseline.set(String(row.mode), row);
+    }
+  }
+
+  const lines: string[] = [];
+  const header = [
+    'mode',
+    'limit',
+    'tps',
+    'tps/base',
+    'gpuAvgUtil',
+    'util/base',
+  ];
+  const widths = header.map((h) => h.length);
+
+  const dataRows = rows.map((row) => {
+    const mode = String(row.mode ?? '');
+    const baseline = byModeBaseline.get(mode);
+    const tps = Number(row.tokensPerSecond ?? 0);
+    const util = Number(row.gpuAvgUtilGpu ?? 0);
+    const tpsBase = baseline ? Number(baseline.tokensPerSecond ?? 0) : 0;
+    const utilBase = baseline ? Number(baseline.gpuAvgUtilGpu ?? 0) : 0;
+    const tpsRatio = tpsBase > 0 ? tps / tpsBase : 0;
+    const utilRatio = utilBase > 0 ? util / utilBase : 0;
+    const out = [
+      mode,
+      row.limiterTarget == null ? 'baseline' : String(row.limiterTarget),
+      tps ? tps.toFixed(3) : '',
+      tpsRatio ? tpsRatio.toFixed(3) : '',
+      util ? util.toFixed(2) : '',
+      utilRatio ? utilRatio.toFixed(3) : '',
+    ];
+    out.forEach((value, i) => {
+      if (value.length > widths[i]) widths[i] = value.length;
+    });
+    return out;
+  });
+
+  const pad = (value: string, width: number) =>
+    value.padEnd(width, ' ');
+
+  lines.push(
+    header.map((value, i) => pad(value, widths[i])).join('  ')
+  );
+  lines.push(
+    widths.map((w) => '-'.repeat(w)).join('  ')
+  );
+  for (const row of dataRows) {
+    lines.push(row.map((value, i) => pad(value, widths[i])).join('  '));
+  }
+  return lines.join('\n');
 }
 
 main().catch(async (err) => {
